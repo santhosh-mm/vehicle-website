@@ -1,22 +1,37 @@
+import os
 from flask import Flask, render_template_string, request, redirect, url_for, send_file
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, date
 import pandas as pd
 import io
-import os
 
 app = Flask(__name__)
 
 # --- DATABASE SETUP ---
-# Read DB URL from environment. Fallback to sqlite for safety/local.
-DB_URL = os.getenv(
-    "DATABASE_URL",
-    "sqlite:///vehicles.db"  # fallback if env var not set
-)
+# We will read the DB URL from an environment variable if present.
+# If not present, we fall back to local SQLite file.
+db_url = os.getenv("DATABASE_URL")
 
-app.config['SQLALCHEMY_DATABASE_URI'] = DB_URL
+if not db_url:
+    # Local fallback (no Supabase / no internet)
+    db_url = "sqlite:///vehicles.db"
+else:
+    # Render / Supabase / Cloud Postgres case
+    # If some provider gives 'postgres://' we convert to 'postgresql+psycopg2://'
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql+psycopg2://", 1)
+    # Ensure driver is psycopg2 when using SQLAlchemy
+    if db_url.startswith("postgresql://"):
+        db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+    # Ensure sslmode=require is set (needed for many cloud DBs)
+    if "sslmode=" not in db_url:
+        joiner = "&" if "?" in db_url else "?"
+        db_url = db_url + f"{joiner}sslmode=require"
+
+app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
+
 
 # --- MODELS ---
 
@@ -147,18 +162,6 @@ with app.app_context():
     db.create_all()
     seed_vehicles()
 
-# --- HTML TEMPLATES ---
-# (keep your MAIN_TEMPLATE and DASHBOARD_TEMPLATE exactly as you posted; unchanged)
-# ... [I’m not repeating them here to save space, but your templates are fine] ...
-
-# --- ROUTES ---
-# (index, save, save_reasons, download_report, dashboard – all same as you posted)
-
-# At the very bottom:
-if __name__ == "__main__":
-    # For local run & Render compatibility
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
 
 # --- HTML TEMPLATES ---
 
@@ -195,19 +198,6 @@ MAIN_TEMPLATE = """
         .btn-secondary { background-color: #28a745; color: white; }
         .btn-dashboard { background-color: #6f42c1; color: white; }
         select { padding: 4px; }
-        .card-bar {
-            display: flex;
-            gap: 10px;
-            margin: 10px 0;
-            flex-wrap: wrap;
-        }
-        .small-card {
-            background: white;
-            border: 1px solid #e0e0e0;
-            border-radius: 6px;
-            padding: 6px 10px;
-            font-size: 12px;
-        }
     </style>
 </head>
 <body>
@@ -1087,5 +1077,9 @@ def dashboard():
     )
 
 
+# --- ENTRY POINT ---
+
 if __name__ == "__main__":
-    app.run()
+    # Local run & compatible with Render (it sets PORT env var)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)

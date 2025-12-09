@@ -7,10 +7,9 @@ import io
 app = Flask(__name__)
 
 # --- DATABASE SETUP ---
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///vehicles.db'
+app.config['SQLALCHEMY_DATABASE_URI'] = "postgresql+psycopg2://postgres:Santhosh123@db.igfzibrbcqujmhikfiph.supabase.co:5432/postgres?sslmode=require"
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
-
 
 # --- MODELS ---
 
@@ -33,7 +32,7 @@ class DailyStatus(db.Model):
     running = db.Column(db.Integer, nullable=False, default=0)
     idle = db.Column(db.Integer, nullable=False, default=0)
 
-    # Idle From is a DATE
+    # Idle From is still in DB but NOT used in UI now
     idle_from = db.Column(db.Date)
 
     # Old short reason column (we will not use it in UI / Excel now)
@@ -56,6 +55,7 @@ class ReasonEntry(db.Model):
     vehicle_type = db.Column(db.String(100))
     owner = db.Column(db.String(100))
     remarks = db.Column(db.String(255))
+    idle_date = db.Column(db.String(50))  # text from Excel (e.g. 08-12-2025)
 
     def __repr__(self):
         return f"<ReasonEntry {self.date} - {self.location} - {self.serial_no}>"
@@ -67,8 +67,6 @@ def seed_vehicles():
     """Run once to insert your fixed vehicle list."""
     if Vehicle.query.first():
         return  # already filled
-
-    # Same vehicle type can appear in MANY locations with different total_count
 
     fixed_vehicles = [
         # TAMBARAM
@@ -151,20 +149,46 @@ MAIN_TEMPLATE = """
 <head>
     <title>Vehicle Daily Entry</title>
     <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f7fb; }
         h1, h2 { margin-bottom: 10px; }
-        table { border-collapse: collapse; width: 100%; margin-top: 10px; }
-        th, td { border: 1px solid #ccc; padding: 6px; text-align: center; }
+        table { border-collapse: collapse; width: 100%; margin-top: 10px; background: white; }
+        th, td { border: 1px solid #e0e0e0; padding: 6px; text-align: center; }
         th { background-color: #f0f0f0; }
         input[type="number"] { width: 70px; }
         input[type="date"] { width: 150px; }
         input[type="text"], textarea { width: 100%; }
-        .top-bar { display: flex; gap: 20px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
-        .btn { padding: 6px 12px; border: none; cursor: pointer; text-decoration: none; }
+        .top-bar { 
+            display: flex; 
+            gap: 20px; 
+            align-items: center; 
+            margin-bottom: 10px; 
+            flex-wrap: wrap; 
+        }
+        .btn { 
+            padding: 6px 12px; 
+            border: none; 
+            cursor: pointer; 
+            text-decoration: none;
+            border-radius: 4px;
+            font-size: 14px;
+        }
         .btn-primary { background-color: #007bff; color: white; }
         .btn-secondary { background-color: #28a745; color: white; }
         .btn-dashboard { background-color: #6f42c1; color: white; }
         select { padding: 4px; }
+        .card-bar {
+            display: flex;
+            gap: 10px;
+            margin: 10px 0;
+            flex-wrap: wrap;
+        }
+        .small-card {
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 12px;
+        }
     </style>
 </head>
 <body>
@@ -207,7 +231,6 @@ MAIN_TEMPLATE = """
         </div>
     </form>
 
-    <!-- Main entry table -->
     <form method="post" action="{{ url_for('save') }}">
         <input type="hidden" name="date" value="{{ selected_date }}">
         <table>
@@ -218,7 +241,6 @@ MAIN_TEMPLATE = """
                 <th>Total Count (Fixed)</th>
                 <th>Running</th>
                 <th>Idle</th>
-                <th>Idle From Date</th>
             </tr>
 
             {% for row in rows %}
@@ -236,10 +258,6 @@ MAIN_TEMPLATE = """
                         <input type="number" name="idle_{{ row.vehicle.id }}"
                                value="{{ row.status.idle if row.status else '' }}" min="0">
                     </td>
-                    <td>
-                        <input type="date" name="idle_from_{{ row.vehicle.id }}"
-                               value="{{ row.status.idle_from.strftime('%Y-%m-%d') if row.status and row.status.idle_from else '' }}">
-                    </td>
                 </tr>
             {% endfor %}
         </table>
@@ -255,7 +273,7 @@ MAIN_TEMPLATE = """
         <h2>Detailed Reasons for {{ selected_location }} ({{ selected_date }})</h2>
         <p>
             Paste from Excel here (one row per line):<br>
-            <b>VECHILE NO &nbsp;&nbsp; VECHILE TYPE &nbsp;&nbsp; OWNER &nbsp;&nbsp; REMARKS / REASON</b><br>
+            <b>VECHILE NO &nbsp;&nbsp; VECHILE TYPE &nbsp;&nbsp; OWNER &nbsp;&nbsp; REMARKS / REASON &nbsp;&nbsp; IDLE DATE</b><br>
             (Columns must be separated by TAB when you paste)
         </p>
 
@@ -263,8 +281,8 @@ MAIN_TEMPLATE = """
             <input type="hidden" name="date" value="{{ selected_date }}">
             <input type="hidden" name="location" value="{{ selected_location }}">
             <textarea name="reasons_raw" rows="10" placeholder="Example:
-TN01AB1234[TAB]JCB[TAB]ABC CONTRACTOR[TAB]Breakdown clutch
-TN01AB5678[TAB]TRACTOR[TAB]XYZ OWNER[TAB]Tyre puncture"></textarea>
+TN01AB1234[TAB]JCB[TAB]ABC CONTRACTOR[TAB]Breakdown clutch[TAB]08-12-2025
+TN01AB5678[TAB]TRACTOR[TAB]XYZ OWNER[TAB]Tyre puncture[TAB]09-12-2025"></textarea>
             <br><br>
             <button type="submit" class="btn btn-secondary">Save Reasons for {{ selected_location }}</button>
         </form>
@@ -278,6 +296,7 @@ TN01AB5678[TAB]TRACTOR[TAB]XYZ OWNER[TAB]Tyre puncture"></textarea>
                     <th>VECHILE TYPE</th>
                     <th>OWNER</th>
                     <th>REMARKS / REASON</th>
+                    <th>IDLE DATE</th>
                 </tr>
                 {% for r in reasons %}
                     <tr>
@@ -286,6 +305,7 @@ TN01AB5678[TAB]TRACTOR[TAB]XYZ OWNER[TAB]Tyre puncture"></textarea>
                         <td>{{ r.vehicle_type }}</td>
                         <td>{{ r.owner }}</td>
                         <td>{{ r.remarks }}</td>
+                        <td>{{ r.idle_date }}</td>
                     </tr>
                 {% endfor %}
             </table>
@@ -305,18 +325,90 @@ DASHBOARD_TEMPLATE = """
 <head>
     <title>Vehicle Dashboard</title>
     <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f7fb; }
         h1, h2 { margin-bottom: 10px; }
-        table { border-collapse: collapse; width: 100%; margin-top: 10px; }
-        th, td { border: 1px solid #ccc; padding: 6px; text-align: center; }
+        table { border-collapse: collapse; width: 100%; margin-top: 10px; background: white; }
+        th, td { border: 1px solid #e0e0e0; padding: 6px; text-align: center; }
         th { background-color: #f0f0f0; }
-        .top-bar { display: flex; gap: 20px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
-        .btn { padding: 6px 12px; border: none; cursor: pointer; text-decoration: none; }
+        .top-bar { 
+            display: flex; 
+            gap: 20px; 
+            align-items: center; 
+            margin-bottom: 10px; 
+            flex-wrap: wrap; 
+        }
+        .btn { 
+            padding: 6px 12px; 
+            border: none; 
+            cursor: pointer; 
+            text-decoration: none; 
+            border-radius: 4px;
+            font-size: 14px;
+        }
         .btn-primary { background-color: #007bff; color: white; }
         .btn-back { background-color: #6c757d; color: white; }
         select, input[type="date"] { padding: 4px; }
-        .summary-box { margin-top: 10px; padding: 10px; border: 1px solid #ccc; }
+        .summary-box { 
+            margin-top: 10px; 
+            padding: 10px; 
+            border-radius: 6px;
+            background: white;
+            border: 1px solid #e0e0e0; 
+        }
+        .summary-cards {
+            display: flex;
+            gap: 12px;
+            margin-top: 10px;
+            flex-wrap: wrap;
+        }
+        .card {
+            flex: 1 1 180px;
+            background: white;
+            border-radius: 8px;
+            padding: 10px 12px;
+            border: 1px solid #e0e0e0;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+        }
+        .card-title {
+            font-size: 12px;
+            text-transform: uppercase;
+            color: #777;
+            margin-bottom: 4px;
+        }
+        .card-value {
+            font-size: 20px;
+            font-weight: bold;
+        }
+        .card-sub {
+            font-size: 11px;
+            color: #999;
+        }
+        .charts-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .chart-box {
+            flex: 1 1 320px;
+            background: white;
+            border-radius: 8px;
+            border: 1px solid #e0e0e0;
+            padding: 10px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+        .chart-title {
+            font-size: 14px;
+            font-weight: bold;
+            margin-bottom: 6px;
+        }
+        canvas {
+            max-width: 100%;
+            height: 280px;
+        }
     </style>
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
     <h1>Vehicle Dashboard</h1>
@@ -355,6 +447,50 @@ DASHBOARD_TEMPLATE = """
         {% else %}
             &nbsp;&nbsp;|&nbsp;&nbsp; <b>Location:</b> {{ selected_location }}
         {% endif %}
+    </div>
+
+    <!-- High-level totals -->
+    {% if overall_totals %}
+    <div class="summary-cards">
+        <div class="card">
+            <div class="card-title">Total Vehicles (Fixed)</div>
+            <div class="card-value">{{ overall_totals.total_fixed }}</div>
+            <div class="card-sub">Across selected view</div>
+        </div>
+        <div class="card">
+            <div class="card-title">Running</div>
+            <div class="card-value">{{ overall_totals.running }}</div>
+            <div class="card-sub">Vehicles in operation</div>
+        </div>
+        <div class="card">
+            <div class="card-title">Idle (Not Running)</div>
+            <div class="card-value">{{ overall_totals.idle }}</div>
+            <div class="card-sub">Marked as idle</div>
+        </div>
+        <div class="card">
+            <div class="card-title">Not Updated</div>
+            <div class="card-value">{{ overall_totals.not_updated }}</div>
+            <div class="card-sub">No entry filled</div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Charts Section -->
+    <div class="charts-row">
+        <div class="chart-box">
+            <div class="chart-title">By Location (Running / Idle / Not Updated)</div>
+            <canvas id="locationChart"></canvas>
+        </div>
+        <div class="chart-box">
+            <div class="chart-title">
+                By Vehicle Type{% if selected_location != 'all' %} - {{ selected_location }}{% endif %}
+            </div>
+            <canvas id="typeChart"></canvas>
+        </div>
+        <div class="chart-box">
+            <div class="chart-title">Overall Status Split</div>
+            <canvas id="overallChart"></canvas>
+        </div>
     </div>
 
     <h2>Summary by Location</h2>
@@ -418,6 +554,122 @@ DASHBOARD_TEMPLATE = """
             </tr>
         {% endif %}
     </table>
+
+    <script>
+        // Data from Flask → JS
+        const locLabels = {{ chart_location_labels | tojson }};
+        const locRunning = {{ chart_location_running | tojson }};
+        const locIdle = {{ chart_location_idle | tojson }};
+        const locNotUpdated = {{ chart_location_not_updated | tojson }};
+
+        const typeLabels = {{ chart_type_labels | tojson }};
+        const typeRunning = {{ chart_type_running | tojson }};
+        const typeIdle = {{ chart_type_idle | tojson }};
+        const typeNotUpdated = {{ chart_type_not_updated | tojson }};
+
+        const overallRunning = {{ chart_overall_running | tojson }};
+        const overallIdle = {{ chart_overall_idle | tojson }};
+        const overallNotUpdated = {{ chart_overall_not_updated | tojson }};
+
+        // Location stacked bar
+        const locationCtx = document.getElementById('locationChart').getContext('2d');
+        new Chart(locationCtx, {
+            type: 'bar',
+            data: {
+                labels: locLabels,
+                datasets: [
+                    {
+                        label: 'Running',
+                        data: locRunning,
+                        backgroundColor: 'rgba(40, 167, 69, 0.8)'
+                    },
+                    {
+                        label: 'Idle',
+                        data: locIdle,
+                        backgroundColor: 'rgba(255, 193, 7, 0.8)'
+                    },
+                    {
+                        label: 'Not Updated',
+                        data: locNotUpdated,
+                        backgroundColor: 'rgba(220, 53, 69, 0.8)'
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: { position: 'top' },
+                    title: { display: false }
+                },
+                scales: {
+                    x: { stacked: true },
+                    y: { stacked: true, beginAtZero: true }
+                }
+            }
+        });
+
+        // Vehicle type stacked bar
+        const typeCtx = document.getElementById('typeChart').getContext('2d');
+        new Chart(typeCtx, {
+            type: 'bar',
+            data: {
+                labels: typeLabels,
+                datasets: [
+                    {
+                        label: 'Running',
+                        data: typeRunning,
+                        backgroundColor: 'rgba(40, 167, 69, 0.8)'
+                    },
+                    {
+                        label: 'Idle',
+                        data: typeIdle,
+                        backgroundColor: 'rgba(255, 193, 7, 0.8)'
+                    },
+                    {
+                        label: 'Not Updated',
+                        data: typeNotUpdated,
+                        backgroundColor: 'rgba(220, 53, 69, 0.8)'
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: { position: 'top' },
+                    title: { display: false }
+                },
+                scales: {
+                    x: { stacked: true },
+                    y: { stacked: true, beginAtZero: true }
+                }
+            }
+        });
+
+        // Overall doughnut
+        const overallCtx = document.getElementById('overallChart').getContext('2d');
+        new Chart(overallCtx, {
+            type: 'doughnut',
+            data: {
+                labels: ['Running', 'Idle', 'Not Updated'],
+                datasets: [{
+                    data: [overallRunning, overallIdle, overallNotUpdated],
+                    backgroundColor: [
+                        'rgba(40, 167, 69, 0.9)',
+                        'rgba(255, 193, 7, 0.9)',
+                        'rgba(220, 53, 69, 0.9)'
+                    ]
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: { position: 'bottom' },
+                    title: { display: false }
+                },
+                cutout: '55%'
+            }
+        });
+    </script>
 
 </body>
 </html>
@@ -491,13 +743,9 @@ def save():
     for v in vehicles:
         running_raw = request.form.get(f"running_{v.id}", "0")
         idle_raw = request.form.get(f"idle_{v.id}", "0")
-        idle_from_raw = request.form.get(f"idle_from_{v.id}", "")
 
         running = int(running_raw) if running_raw else 0
         idle = int(idle_raw) if idle_raw else 0
-
-        # parse idle_from as DATE (YYYY-MM-DD)
-        idle_from = datetime.strptime(idle_from_raw, "%Y-%m-%d").date() if idle_from_raw else None
 
         status = DailyStatus.query.filter_by(date=selected_date, vehicle_id=v.id).first()
         if not status:
@@ -505,7 +753,7 @@ def save():
 
         status.running = running
         status.idle = idle
-        status.idle_from = idle_from
+        status.idle_from = None
 
         db.session.add(status)
 
@@ -531,10 +779,9 @@ def save_reasons():
             if not line:
                 continue
 
-            # Excel paste = TAB separated
             parts = [p.strip() for p in line.split("\t")]
 
-            # We expect: VEHICLE NO, VEHICLE TYPE, OWNER, REMARKS/REASON
+            # Expect: VEHICLE NO, VEHICLE TYPE, OWNER, REMARKS/REASON, IDLE DATE
             if len(parts) < 1:
                 continue
 
@@ -542,6 +789,7 @@ def save_reasons():
             vehicle_type = parts[1] if len(parts) > 1 else ""
             owner = parts[2] if len(parts) > 2 else ""
             remarks = parts[3] if len(parts) > 3 else ""
+            idle_date = parts[4] if len(parts) > 4 else ""
 
             entry = ReasonEntry(
                 date=selected_date,
@@ -550,7 +798,8 @@ def save_reasons():
                 vehicle_no=vehicle_no,
                 vehicle_type=vehicle_type,
                 owner=owner,
-                remarks=remarks
+                remarks=remarks,
+                idle_date=idle_date
             )
             db.session.add(entry)
             serial_no += 1
@@ -570,7 +819,6 @@ def download_report():
     else:
         selected_date = datetime.strptime(date_str, "%Y-%m-%d").date()
 
-    # join DailyStatus + Vehicle for main status sheet
     query = (
         db.session.query(
             DailyStatus.date,
@@ -578,14 +826,12 @@ def download_report():
             Vehicle.vehicle_type,
             Vehicle.total_count,
             DailyStatus.running,
-            DailyStatus.idle,
-            DailyStatus.idle_from
+            DailyStatus.idle
         )
         .join(Vehicle, DailyStatus.vehicle_id == Vehicle.id)
         .filter(DailyStatus.date == selected_date)
     )
 
-    # optional location filter
     if location != "all":
         query = query.filter(Vehicle.location == location)
 
@@ -595,15 +841,14 @@ def download_report():
     if not rows:
         df_status = pd.DataFrame(columns=[
             "Date", "Location", "Vehicle Type", "Total Count",
-            "Running", "Idle", "Idle From Date"
+            "Running", "Idle"
         ])
     else:
         df_status = pd.DataFrame(rows, columns=[
             "Date", "Location", "Vehicle Type", "Total Count",
-            "Running", "Idle", "Idle From Date"
+            "Running", "Idle"
         ])
 
-    # Reasons sheet data
     reason_query = ReasonEntry.query.filter(ReasonEntry.date == selected_date)
     if location != "all":
         reason_query = reason_query.filter(ReasonEntry.location == location)
@@ -613,7 +858,8 @@ def download_report():
 
     if not reason_rows:
         df_reasons = pd.DataFrame(columns=[
-            "Date", "Location", "S No", "VECHILE NO", "VECHILE TYPE", "OWNER", "REMARKS / REASON"
+            "Date", "Location", "S No", "VECHILE NO", "VECHILE TYPE",
+            "OWNER", "REMARKS / REASON", "IDLE DATE"
         ])
     else:
         data = []
@@ -625,14 +871,15 @@ def download_report():
                 r.vehicle_no,
                 r.vehicle_type,
                 r.owner,
-                r.remarks
+                r.remarks,
+                r.idle_date
             ])
         df_reasons = pd.DataFrame(data, columns=[
-            "Date", "Location", "S No", "VECHILE NO", "VECHILE TYPE", "OWNER", "REMARKS / REASON"
+            "Date", "Location", "S No", "VECHILE NO", "VECHILE TYPE",
+            "OWNER", "REMARKS / REASON", "IDLE DATE"
         ])
 
     output = io.BytesIO()
-    # make sure xlsxwriter is installed in venv: pip install xlsxwriter
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         df_status.to_excel(writer, index=False, sheet_name="Status")
         df_reasons.to_excel(writer, index=False, sheet_name="Reasons")
@@ -669,7 +916,7 @@ def dashboard():
     loc_rows = db.session.query(Vehicle.location).distinct().order_by(Vehicle.location).all()
     locations = [r[0] for r in loc_rows]
 
-    # 4) get all vehicles (we will filter in Python)
+    # 4) get all vehicles
     vehicles_all = Vehicle.query.order_by(Vehicle.location, Vehicle.vehicle_type).all()
 
     # 5) get all statuses for this date
@@ -772,6 +1019,31 @@ def dashboard():
             "not_updated": total_notupd_type_all
         })
 
+    # --- Overall totals (for cards + overall chart) ---
+    overall_totals = None
+    if location_summary_totals:
+        overall_totals = type("Obj", (), {
+            "total_fixed": location_summary_totals.total_fixed,
+            "running": location_summary_totals.running,
+            "idle": location_summary_totals.idle,
+            "not_updated": location_summary_totals.not_updated
+        })
+
+    # --- Data for charts ---
+    chart_location_labels = [row["location"] for row in location_summary]
+    chart_location_running = [row["running"] for row in location_summary]
+    chart_location_idle = [row["idle"] for row in location_summary]
+    chart_location_not_updated = [row["not_updated"] for row in location_summary]
+
+    chart_type_labels = [row["vehicle_type"] for row in type_summary]
+    chart_type_running = [row["running"] for row in type_summary]
+    chart_type_idle = [row["idle"] for row in type_summary]
+    chart_type_not_updated = [row["not_updated"] for row in type_summary]
+
+    chart_overall_running = overall_totals.running if overall_totals else 0
+    chart_overall_idle = overall_totals.idle if overall_totals else 0
+    chart_overall_not_updated = overall_totals.not_updated if overall_totals else 0
+
     return render_template_string(
         DASHBOARD_TEMPLATE,
         selected_date=selected_date.strftime("%Y-%m-%d"),
@@ -780,10 +1052,21 @@ def dashboard():
         location_summary=location_summary,
         location_summary_totals=location_summary_totals,
         type_summary=type_summary,
-        type_summary_totals=type_summary_totals
+        type_summary_totals=type_summary_totals,
+        overall_totals=overall_totals,
+        chart_location_labels=chart_location_labels,
+        chart_location_running=chart_location_running,
+        chart_location_idle=chart_location_idle,
+        chart_location_not_updated=chart_location_not_updated,
+        chart_type_labels=chart_type_labels,
+        chart_type_running=chart_type_running,
+        chart_type_idle=chart_type_idle,
+        chart_type_not_updated=chart_type_not_updated,
+        chart_overall_running=chart_overall_running,
+        chart_overall_idle=chart_overall_idle,
+        chart_overall_not_updated=chart_overall_not_updated
     )
 
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
-

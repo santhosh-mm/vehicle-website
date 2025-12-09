@@ -3,11 +3,18 @@ from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, date
 import pandas as pd
 import io
+import os
 
 app = Flask(__name__)
 
 # --- DATABASE SETUP ---
-app.config['SQLALCHEMY_DATABASE_URI'] = "postgresql+psycopg2://postgres:Santhosh123@db.igfzibrbcqujmhikfiph.supabase.co:5432/postgres?sslmode=require"
+# Read DB URL from environment. Fallback to sqlite for safety/local.
+DB_URL = os.getenv(
+    "DATABASE_URL",
+    "sqlite:///vehicles.db"  # fallback if env var not set
+)
+
+app.config['SQLALCHEMY_DATABASE_URI'] = DB_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
@@ -140,6 +147,18 @@ with app.app_context():
     db.create_all()
     seed_vehicles()
 
+# --- HTML TEMPLATES ---
+# (keep your MAIN_TEMPLATE and DASHBOARD_TEMPLATE exactly as you posted; unchanged)
+# ... [I’m not repeating them here to save space, but your templates are fine] ...
+
+# --- ROUTES ---
+# (index, save, save_reasons, download_report, dashboard – all same as you posted)
+
+# At the very bottom:
+if __name__ == "__main__":
+    # For local run & Render compatibility
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
 
 # --- HTML TEMPLATES ---
 

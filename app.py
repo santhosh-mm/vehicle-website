@@ -19,16 +19,13 @@ if not db_url:
     db_url = "sqlite:///vehicles.db"
     logger.info("Using local SQLite database.")
 else:
-    # Many hosting providers (and Supabase) return a URL that starts with "postgres://" which SQLAlchemy
-    # wants as "postgresql+psycopg2://" (or "postgresql://"). We normalize a few common variants:
-    # - convert "postgres://" -> "postgresql+psycopg2://"
-    # - convert "postgresql://" -> "postgresql+psycopg2://"
+    # Normalize common Postgres URL variants to SQLAlchemy form
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql+psycopg2://", 1)
     elif db_url.startswith("postgresql://"):
         db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
 
-    # Ensure SSL mode is set for cloud Postgres (if not already present)
+    # Ensure SSL mode for cloud Postgres (Neon/Railway often require it)
     if "sslmode=" not in db_url:
         joiner = "&" if "?" in db_url else "?"
         db_url = db_url + f"{joiner}sslmode=require"
@@ -42,6 +39,7 @@ db = SQLAlchemy(app)
 
 # --- MODELS ---
 class Vehicle(db.Model):
+    __tablename__ = "vehicle"
     id = db.Column(db.Integer, primary_key=True)
     vehicle_type = db.Column(db.String(100), nullable=False)
     location = db.Column(db.String(100), nullable=False)
@@ -52,6 +50,7 @@ class Vehicle(db.Model):
 
 
 class DailyStatus(db.Model):
+    __tablename__ = "daily_status"
     id = db.Column(db.Integer, primary_key=True)
     date = db.Column(db.Date, nullable=False)
     vehicle_id = db.Column(db.Integer, db.ForeignKey('vehicle.id'), nullable=False)
@@ -69,6 +68,7 @@ class DailyStatus(db.Model):
 
 
 class ReasonEntry(db.Model):
+    __tablename__ = "reason_entry"
     id = db.Column(db.Integer, primary_key=True)
     date = db.Column(db.Date, nullable=False)
     location = db.Column(db.String(100), nullable=False)
@@ -86,13 +86,13 @@ class ReasonEntry(db.Model):
 
 # --- INITIAL DB CREATION AND SAMPLE VEHICLES ---
 def seed_vehicles():
-    """Run once to insert your fixed vehicle list."""
-    if Vehicle.query.first():
+    """Run once to insert your fixed vehicle list if database is empty."""
+    # If any vehicle exists, skip seeding
+    if db.session.query(Vehicle).first():
         logger.info("Vehicles already seeded — skipping.")
         return
 
     fixed_vehicles = [
-        # TAMBARAM
         {"vehicle_type": "TRACTORS",          "location": "TAMBARAM",  "total_count": 33},
         {"vehicle_type": "6 WHEEL TIPPERS",   "location": "TAMBARAM",  "total_count": 1},
         {"vehicle_type": "10 WHEEL TIPPERS",  "location": "TAMBARAM",  "total_count": 0},
@@ -106,8 +106,6 @@ def seed_vehicles():
         {"vehicle_type": "TMRS",              "location": "TAMBARAM",  "total_count": 4},
         {"vehicle_type": "STAFF BUS",         "location": "TAMBARAM",  "total_count": 6},
         {"vehicle_type": "MINI EXCAVATORS",   "location": "TAMBARAM",  "total_count": 5},
-
-        # MADURAI
         {"vehicle_type": "TRACTORS",          "location": "MADURAI",   "total_count": 16},
         {"vehicle_type": "6 WHEEL TIPPERS",   "location": "MADURAI",   "total_count": 2},
         {"vehicle_type": "10 WHEEL TIPPERS",  "location": "MADURAI",   "total_count": 2},
@@ -121,8 +119,6 @@ def seed_vehicles():
         {"vehicle_type": "TMRS",              "location": "MADURAI",   "total_count": 5},
         {"vehicle_type": "STAFF BUS",         "location": "MADURAI",   "total_count": 0},
         {"vehicle_type": "MINI EXCAVATORS",   "location": "MADURAI",   "total_count": 0},
-
-        # KARUR
         {"vehicle_type": "TRACTORS",          "location": "KARUR",     "total_count": 3},
         {"vehicle_type": "6 WHEEL TIPPERS",   "location": "KARUR",     "total_count": 3},
         {"vehicle_type": "10 WHEEL TIPPERS",  "location": "KARUR",     "total_count": 0},
@@ -136,8 +132,6 @@ def seed_vehicles():
         {"vehicle_type": "TMRS",              "location": "KARUR",     "total_count": 0},
         {"vehicle_type": "STAFF BUS",         "location": "KARUR",     "total_count": 0},
         {"vehicle_type": "MINI EXCAVATORS",   "location": "KARUR",     "total_count": 0},
-
-        # TUTICORIN
         {"vehicle_type": "TRACTORS",          "location": "TUTICORIN", "total_count": 17},
         {"vehicle_type": "6 WHEEL TIPPERS",   "location": "TUTICORIN", "total_count": 4},
         {"vehicle_type": "10 WHEEL TIPPERS",  "location": "TUTICORIN", "total_count": 2},
@@ -1103,5 +1097,5 @@ def dashboard():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    # In production you'll run via gunicorn, locally you can run like this:
     app.run(host="0.0.0.0", port=port, debug=False)
+

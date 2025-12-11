@@ -4,3 +4,4 @@ pandas
 XlsxWriter
 psycopg2-binary      # VERY important if you use Render Postgres
 gunicorn             # for production server on Render
+SQLAlchemy

@@ -4,6 +4,10 @@ from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, date
 import pandas as pd
 import io
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -11,17 +15,25 @@ app = Flask(__name__)
 db_url = os.getenv("DATABASE_URL")
 
 if not db_url:
-    # Local fallback (no Supabase / no internet)
+    # Local fallback (sqlite file in repo folder)
     db_url = "sqlite:///vehicles.db"
+    logger.info("Using local SQLite database.")
 else:
-    # Render / Supabase / Cloud Postgres case
+    # Many hosting providers (and Supabase) return a URL that starts with "postgres://" which SQLAlchemy
+    # wants as "postgresql+psycopg2://" (or "postgresql://"). We normalize a few common variants:
+    # - convert "postgres://" -> "postgresql+psycopg2://"
+    # - convert "postgresql://" -> "postgresql+psycopg2://"
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql+psycopg2://", 1)
-    if db_url.startswith("postgresql://"):
+    elif db_url.startswith("postgresql://"):
         db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+
+    # Ensure SSL mode is set for cloud Postgres (if not already present)
     if "sslmode=" not in db_url:
         joiner = "&" if "?" in db_url else "?"
         db_url = db_url + f"{joiner}sslmode=require"
+
+    logger.info("Using cloud Postgres database (DATABASE_URL provided).")
 
 app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -29,12 +41,11 @@ db = SQLAlchemy(app)
 
 
 # --- MODELS ---
-
 class Vehicle(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    vehicle_type = db.Column(db.String(100), nullable=False)  # e.g. "JCB"
-    location = db.Column(db.String(100), nullable=False)      # e.g. "TAMBARAM"
-    total_count = db.Column(db.Integer, nullable=False)       # fixed count
+    vehicle_type = db.Column(db.String(100), nullable=False)
+    location = db.Column(db.String(100), nullable=False)
+    total_count = db.Column(db.Integer, nullable=False)
 
     def __repr__(self):
         return f"<Vehicle {self.vehicle_type} - {self.location}>"
@@ -58,7 +69,6 @@ class DailyStatus(db.Model):
 
 
 class ReasonEntry(db.Model):
-    """Detailed reasons you paste from Excel for each date + location."""
     id = db.Column(db.Integer, primary_key=True)
     date = db.Column(db.Date, nullable=False)
     location = db.Column(db.String(100), nullable=False)
@@ -68,18 +78,18 @@ class ReasonEntry(db.Model):
     vehicle_type = db.Column(db.String(100))
     owner = db.Column(db.String(100))
     remarks = db.Column(db.String(255))
-    idle_date = db.Column(db.String(50))  # text from Excel (e.g. 08-12-2025)
+    idle_date = db.Column(db.String(50))
 
     def __repr__(self):
         return f"<ReasonEntry {self.date} - {self.location} - {self.serial_no}>"
 
 
 # --- INITIAL DB CREATION AND SAMPLE VEHICLES ---
-
 def seed_vehicles():
     """Run once to insert your fixed vehicle list."""
     if Vehicle.query.first():
-        return  # already filled
+        logger.info("Vehicles already seeded — skipping.")
+        return
 
     fixed_vehicles = [
         # TAMBARAM
@@ -146,7 +156,7 @@ def seed_vehicles():
     for v in fixed_vehicles:
         db.session.add(Vehicle(**v))
     db.session.commit()
-    print("✅ Vehicles inserted. Edit seed_vehicles() to match your real counts.")
+    logger.info("✅ Vehicles inserted. Edit seed_vehicles() to match your real counts.")
 
 
 with app.app_context():
@@ -1093,4 +1103,5 @@ def dashboard():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    # In production you'll run via gunicorn, locally you can run like this:
+    app.run(host="0.0.0.0", port=port, debug=False)

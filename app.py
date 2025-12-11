@@ -8,8 +8,6 @@ import io
 app = Flask(__name__)
 
 # --- DATABASE SETUP ---
-# We will read the DB URL from an environment variable if present.
-# If not present, we fall back to local SQLite file.
 db_url = os.getenv("DATABASE_URL")
 
 if not db_url:
@@ -17,13 +15,10 @@ if not db_url:
     db_url = "sqlite:///vehicles.db"
 else:
     # Render / Supabase / Cloud Postgres case
-    # If some provider gives 'postgres://' we convert to 'postgresql+psycopg2://'
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql+psycopg2://", 1)
-    # Ensure driver is psycopg2 when using SQLAlchemy
     if db_url.startswith("postgresql://"):
         db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
-    # Ensure sslmode=require is set (needed for many cloud DBs)
     if "sslmode=" not in db_url:
         joiner = "&" if "?" in db_url else "?"
         db_url = db_url + f"{joiner}sslmode=require"
@@ -47,17 +42,13 @@ class Vehicle(db.Model):
 
 class DailyStatus(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    # column name is 'date'
     date = db.Column(db.Date, nullable=False)
     vehicle_id = db.Column(db.Integer, db.ForeignKey('vehicle.id'), nullable=False)
 
     running = db.Column(db.Integer, nullable=False, default=0)
     idle = db.Column(db.Integer, nullable=False, default=0)
 
-    # Idle From is still in DB but NOT used in UI now
     idle_from = db.Column(db.Date)
-
-    # Old short reason column (we will not use it in UI / Excel now)
     reason = db.Column(db.String(255))
 
     vehicle = db.relationship('Vehicle', backref='statuses')
@@ -242,6 +233,7 @@ MAIN_TEMPLATE = """
 
     <form method="post" action="{{ url_for('save') }}">
         <input type="hidden" name="date" value="{{ selected_date }}">
+        <input type="hidden" name="location" value="{{ selected_location }}">
         <table>
             <tr>
                 <th>S No</th>
@@ -257,15 +249,17 @@ MAIN_TEMPLATE = """
                     <td>{{ loop.index }}</td>
                     <td>{{ row.vehicle.vehicle_type }}</td>
                     <td>{{ row.vehicle.location }}</td>
-                    <td>{{ row.vehicle.total_count }}</td>
-
+                    <td>
+                        <input type="number" name="total_{{ row.vehicle.id }}"
+                               value="{{ row.vehicle.total_count if row.vehicle.total_count is not none else '' }}" min="0">
+                    </td>
                     <td>
                         <input type="number" name="running_{{ row.vehicle.id }}"
-                               value="{{ row.status.running if row.status else '' }}" min="0">
+                               value="{% if row.status and row.status.running is not none %}{{ row.status.running }}{% endif %}" min="0">
                     </td>
                     <td>
                         <input type="number" name="idle_{{ row.vehicle.id }}"
-                               value="{{ row.status.idle if row.status else '' }}" min="0">
+                               value="{% if row.status and row.status.idle is not none %}{{ row.status.idle }}{% endif %}" min="0">
                     </td>
                 </tr>
             {% endfor %}
@@ -282,16 +276,16 @@ MAIN_TEMPLATE = """
         <h2>Detailed Reasons for {{ selected_location }} ({{ selected_date }})</h2>
         <p>
             Paste from Excel here (one row per line):<br>
-            <b>VECHILE NO &nbsp;&nbsp; VECHILE TYPE &nbsp;&nbsp; OWNER &nbsp;&nbsp; REMARKS / REASON &nbsp;&nbsp; IDLE DATE</b><br>
-            (Columns must be separated by TAB when you paste)
+            <b>S NO &nbsp;&nbsp; VECHILE NO &nbsp;&nbsp; VECHILE TYPE &nbsp;&nbsp; OWNER &nbsp;&nbsp; REMARKS / REASON &nbsp;&nbsp; IDLE DATE</b><br>
+            (Columns must be separated by TAB when you paste from Excel)
         </p>
 
         <form method="post" action="{{ url_for('save_reasons') }}">
             <input type="hidden" name="date" value="{{ selected_date }}">
             <input type="hidden" name="location" value="{{ selected_location }}">
             <textarea name="reasons_raw" rows="10" placeholder="Example:
-TN01AB1234[TAB]JCB[TAB]ABC CONTRACTOR[TAB]Breakdown clutch[TAB]08-12-2025
-TN01AB5678[TAB]TRACTOR[TAB]XYZ OWNER[TAB]Tyre puncture[TAB]09-12-2025"></textarea>
+1[TAB]TN01AB1234[TAB]JCB[TAB]ABC CONTRACTOR[TAB]Breakdown clutch[TAB]08-12-2025
+2[TAB]TN01AB5678[TAB]TRACTOR[TAB]XYZ OWNER[TAB]Tyre puncture[TAB]09-12-2025"></textarea>
             <br><br>
             <button type="submit" class="btn btn-secondary">Save Reasons for {{ selected_location }}</button>
         </form>
@@ -458,7 +452,6 @@ DASHBOARD_TEMPLATE = """
         {% endif %}
     </div>
 
-    <!-- High-level totals -->
     {% if overall_totals %}
     <div class="summary-cards">
         <div class="card">
@@ -484,7 +477,6 @@ DASHBOARD_TEMPLATE = """
     </div>
     {% endif %}
 
-    <!-- Charts Section -->
     <div class="charts-row">
         <div class="chart-box">
             <div class="chart-title">By Location (Running / Idle / Not Updated)</div>
@@ -565,7 +557,6 @@ DASHBOARD_TEMPLATE = """
     </table>
 
     <script>
-        // Data from Flask → JS
         const locLabels = {{ chart_location_labels | tojson }};
         const locRunning = {{ chart_location_running | tojson }};
         const locIdle = {{ chart_location_idle | tojson }};
@@ -580,7 +571,6 @@ DASHBOARD_TEMPLATE = """
         const overallIdle = {{ chart_overall_idle | tojson }};
         const overallNotUpdated = {{ chart_overall_not_updated | tojson }};
 
-        // Location stacked bar
         const locationCtx = document.getElementById('locationChart').getContext('2d');
         new Chart(locationCtx, {
             type: 'bar',
@@ -617,7 +607,6 @@ DASHBOARD_TEMPLATE = """
             }
         });
 
-        // Vehicle type stacked bar
         const typeCtx = document.getElementById('typeChart').getContext('2d');
         new Chart(typeCtx, {
             type: 'bar',
@@ -654,7 +643,6 @@ DASHBOARD_TEMPLATE = """
             }
         });
 
-        // Overall doughnut
         const overallCtx = document.getElementById('overallChart').getContext('2d');
         new Chart(overallCtx, {
             type: 'doughnut',
@@ -689,32 +677,26 @@ DASHBOARD_TEMPLATE = """
 
 @app.route("/", methods=["GET"])
 def index():
-    # 1) get selected date
     date_str = request.args.get("date")
     if date_str:
         selected_date = datetime.strptime(date_str, "%Y-%m-%d").date()
     else:
         selected_date = date.today()
 
-    # 2) get selected location (for filter & download)
     selected_location = request.args.get("location", "all")
 
-    # 3) get all distinct locations for dropdown
     loc_rows = db.session.query(Vehicle.location).distinct().order_by(Vehicle.location).all()
     locations = [r[0] for r in loc_rows]
 
-    # 4) build vehicle query (optionally filter by location)
     vehicle_query = Vehicle.query
     if selected_location != "all":
         vehicle_query = vehicle_query.filter_by(location=selected_location)
 
     vehicles = vehicle_query.order_by(Vehicle.location, Vehicle.vehicle_type).all()
 
-    # 5) get existing status for that date
     statuses = DailyStatus.query.filter_by(date=selected_date).all()
     status_by_vehicle = {s.vehicle_id: s for s in statuses}
 
-    # 6) prepare rows for template
     rows = []
     for v in vehicles:
         rows.append({
@@ -722,7 +704,6 @@ def index():
             "status": status_by_vehicle.get(v.id)
         })
 
-    # 7) get existing reasons for this date + location (only if single location)
     reasons = []
     if selected_location != "all":
         reasons = (
@@ -745,16 +726,35 @@ def index():
 @app.route("/save", methods=["POST"])
 def save():
     date_str = request.form.get("date")
+    selected_location = request.form.get("location", "all")
     selected_date = datetime.strptime(date_str, "%Y-%m-%d").date()
 
-    vehicles = Vehicle.query.all()
+    # Only update vehicles for the current view
+    if selected_location == "all":
+        vehicles = Vehicle.query.order_by(Vehicle.location, Vehicle.vehicle_type).all()
+    else:
+        vehicles = Vehicle.query.filter_by(location=selected_location).order_by(
+            Vehicle.location, Vehicle.vehicle_type
+        ).all()
 
     for v in vehicles:
-        running_raw = request.form.get(f"running_{v.id}", "0")
-        idle_raw = request.form.get(f"idle_{v.id}", "0")
+        # --- Update total count if provided ---
+        total_raw = request.form.get(f"total_{v.id}", "").strip()
+        if total_raw != "":
+            try:
+                v.total_count = int(total_raw)
+            except ValueError:
+                pass  # ignore bad input
 
-        running = int(running_raw) if running_raw else 0
-        idle = int(idle_raw) if idle_raw else 0
+        running_raw = request.form.get(f"running_{v.id}", "").strip()
+        idle_raw = request.form.get(f"idle_{v.id}", "").strip()
+
+        # If both are blank, don't touch/create status row (keeps it effectively "blank")
+        if running_raw == "" and idle_raw == "":
+            continue
+
+        running = int(running_raw) if running_raw != "" else 0
+        idle = int(idle_raw) if idle_raw != "" else 0
 
         status = DailyStatus.query.filter_by(date=selected_date, vehicle_id=v.id).first()
         if not status:
@@ -767,7 +767,9 @@ def save():
         db.session.add(status)
 
     db.session.commit()
-    return redirect(url_for("index", date=selected_date.strftime("%Y-%m-%d")))
+    return redirect(url_for("index",
+                            date=selected_date.strftime("%Y-%m-%d"),
+                            location=selected_location))
 
 
 @app.route("/save_reasons", methods=["POST"])
@@ -788,17 +790,28 @@ def save_reasons():
             if not line:
                 continue
 
-            parts = [p.strip() for p in line.split("\t")]
+            # Expect from Excel: columns separated by TAB
+            # Either: S NO, VEHICLE NO, VEHICLE TYPE, OWNER, REMARKS/REASON, IDLE DATE
+            # or:    VEHICLE NO, VEHICLE TYPE, OWNER, REMARKS/REASON, IDLE DATE
+            parts = [p.strip() for p in line.split("\t") if p.strip()]
 
-            # Expect: VEHICLE NO, VEHICLE TYPE, OWNER, REMARKS/REASON, IDLE DATE
             if len(parts) < 1:
                 continue
 
-            vehicle_no = parts[0]
-            vehicle_type = parts[1] if len(parts) > 1 else ""
-            owner = parts[2] if len(parts) > 2 else ""
-            remarks = parts[3] if len(parts) > 3 else ""
-            idle_date = parts[4] if len(parts) > 4 else ""
+            offset = 0
+            # If first column is a number, treat it as S NO and skip for vehicle_no
+            try:
+                possible_sno = int(parts[0])
+                serial_no = possible_sno
+                offset = 1
+            except ValueError:
+                offset = 0  # first column is vehicle_no
+
+            vehicle_no = parts[offset] if len(parts) > offset else ""
+            vehicle_type = parts[offset + 1] if len(parts) > offset + 1 else ""
+            owner = parts[offset + 2] if len(parts) > offset + 2 else ""
+            remarks = parts[offset + 3] if len(parts) > offset + 3 else ""
+            idle_date = parts[offset + 4] if len(parts) > offset + 4 else ""
 
             entry = ReasonEntry(
                 date=selected_date,
@@ -815,7 +828,9 @@ def save_reasons():
 
     db.session.commit()
 
-    return redirect(url_for("index", date=selected_date.strftime("%Y-%m-%d"), location=location))
+    return redirect(url_for("index",
+                            date=selected_date.strftime("%Y-%m-%d"),
+                            location=location))
 
 
 @app.route("/download", methods=["GET"])
@@ -857,6 +872,10 @@ def download_report():
             "Date", "Location", "Vehicle Type", "Total Count",
             "Running", "Idle"
         ])
+
+    # Optional: if you really want blanks instead of 0, uncomment:
+    # for col in ["Total Count", "Running", "Idle"]:
+    #     df_status[col] = df_status[col].replace(0, "")
 
     reason_query = ReasonEntry.query.filter(ReasonEntry.date == selected_date)
     if location != "all":
@@ -911,24 +930,19 @@ def download_report():
 
 @app.route("/dashboard", methods=["GET"])
 def dashboard():
-    # 1) get selected date
     date_str = request.args.get("date")
     if date_str:
         selected_date = datetime.strptime(date_str, "%Y-%m-%d").date()
     else:
         selected_date = date.today()
 
-    # 2) get selected location
     selected_location = request.args.get("location", "all")
 
-    # 3) all locations for dropdown
     loc_rows = db.session.query(Vehicle.location).distinct().order_by(Vehicle.location).all()
     locations = [r[0] for r in loc_rows]
 
-    # 4) get all vehicles
     vehicles_all = Vehicle.query.order_by(Vehicle.location, Vehicle.vehicle_type).all()
 
-    # 5) get all statuses for this date
     statuses = DailyStatus.query.filter_by(date=selected_date).all()
     status_by_vehicle = {s.vehicle_id: s for s in statuses}
 
@@ -977,7 +991,7 @@ def dashboard():
             "not_updated": total_notupd_all
         })
 
-    # --- SUMMARY BY VEHICLE TYPE (for selected location or all) ---
+    # --- SUMMARY BY VEHICLE TYPE ---
     if selected_location == "all":
         v_filtered = vehicles_all
     else:
@@ -1028,7 +1042,6 @@ def dashboard():
             "not_updated": total_notupd_type_all
         })
 
-    # --- Overall totals (for cards + overall chart) ---
     overall_totals = None
     if location_summary_totals:
         overall_totals = type("Obj", (), {
@@ -1038,7 +1051,6 @@ def dashboard():
             "not_updated": location_summary_totals.not_updated
         })
 
-    # --- Data for charts ---
     chart_location_labels = [row["location"] for row in location_summary]
     chart_location_running = [row["running"] for row in location_summary]
     chart_location_idle = [row["idle"] for row in location_summary]
@@ -1080,6 +1092,5 @@ def dashboard():
 # --- ENTRY POINT ---
 
 if __name__ == "__main__":
-    # Local run & compatible with Render (it sets PORT env var)
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)

@@ -1,6 +1,6 @@
-Flask==3.1.0
-Flask-SQLAlchemy==3.1.1
-pandas==2.2.2
-XlsxWriter==3.2.0
-gunicorn==23.0.0
-psycopg2-binary==2.9.9
+flask
+flask_sqlalchemy
+pandas
+XlsxWriter
+psycopg2-binary      # VERY important if you use Render Postgres
+gunicorn             # for production server on Render
